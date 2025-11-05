@@ -3,6 +3,7 @@ package decision
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"nofx/market"
 	"nofx/mcp"
@@ -199,8 +200,60 @@ func calculateMaxCandidates(ctx *Context) int {
 	return len(ctx.CandidateCoins)
 }
 
-// buildSystemPrompt 构建 System Prompt（固定规则，可缓存）
+// loadSystemPromptFromFile 从外部文件加载系统提示词
+func loadSystemPromptFromFile(filePath string) (string, error) {
+	content, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("读取系统提示词文件失败: %w", err)
+	}
+	return string(content), nil
+}
+
+// buildSystemPrompt 构建 System Prompt（从外部文件读取）
 func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage int) string {
+	// 从外部文件读取系统提示词
+	systemPrompt, err := loadSystemPromptFromFile("prompts/system_prompt.txt")
+	if err != nil {
+		// 如果读取文件失败，使用原有的硬编码提示词作为后备
+		log.Printf("警告: 无法从文件加载系统提示词，使用后备提示词: %v", err)
+		return buildFallbackSystemPrompt(accountEquity, btcEthLeverage, altcoinLeverage)
+	}
+
+	// 添加硬约束（风险控制）- 动态生成
+	var sb strings.Builder
+	sb.WriteString("\n\n# 硬约束（风险控制）\n\n")
+	sb.WriteString("1. 风险回报比: 必须 ≥ 1:3（冒1%风险，赚3%+收益）\n")
+	sb.WriteString("2. 最多持仓: 3个币种（质量>数量）\n")
+	sb.WriteString(fmt.Sprintf("3. 单币仓位: 山寨%.0f-%.0f U(%dx杠杆) | BTC/ETH %.0f-%.0f U(%dx杠杆)\n",
+		accountEquity*0.8, accountEquity*1.5, altcoinLeverage, accountEquity*5, accountEquity*10, btcEthLeverage))
+	sb.WriteString("4. 保证金: 总使用率 ≤ 90%\n\n")
+
+	// 添加输出格式 - 动态生成
+	sb.WriteString("# 输出格式\n\n")
+	sb.WriteString("第一步: 思维链（纯文本）\n")
+	sb.WriteString("简洁分析你的思考过程\n\n")
+	sb.WriteString("第二步: JSON决策数组\n\n")
+	sb.WriteString("```json\n[\n")
+	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 97000, \"take_profit\": 91000, \"confidence\": 85, \"risk_usd\": 300, \"reasoning\": \"下跌趋势+MACD死叉\"},\n", btcEthLeverage, accountEquity*5))
+	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"close_long\", \"reasoning\": \"止盈离场\"}\n")
+	sb.WriteString("]\n```\n\n")
+	sb.WriteString("字段说明:\n")
+	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | hold | wait\n")
+	sb.WriteString("- `confidence`: 0-100（开仓建议≥75）\n")
+	sb.WriteString("- 开仓时必填: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n\n")
+	
+	// 合并外部提示词和动态生成的内容
+	systemPrompt = systemPrompt + sb.String()
+	
+	// 替换账户权益占位符（如果有的话）
+	// 注意：新提示词文件中可能没有这些占位符，但为了兼容性保留此逻辑
+	// systemPrompt = strings.ReplaceAll(systemPrompt, "{account_equity}", fmt.Sprintf("%.2f", accountEquity))
+	
+	return systemPrompt
+}
+
+// buildFallbackSystemPrompt 原有的硬编码系统提示词构建函数（作为后备方案）
+func buildFallbackSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage int) string {
 	var sb strings.Builder
 
 	// === 核心使命 ===
