@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -148,9 +150,8 @@ func GetCoinPool() ([]CoinInfo, error) {
 func fetchCoinPool() ([]CoinInfo, error) {
 	log.Printf("🔄 正在请求AI500币种池...")
 
-	client := &http.Client{
-		Timeout: coinPoolConfig.Timeout,
-	}
+	// 使用带代理的HTTP客户端
+	client := createHTTPClient(coinPoolConfig.Timeout)
 
 	resp, err := client.Get(coinPoolConfig.APIURL)
 	if err != nil {
@@ -469,9 +470,8 @@ func GetOITopPositions() ([]OIPosition, error) {
 func fetchOITop() ([]OIPosition, error) {
 	log.Printf("🔄 正在请求OI Top数据...")
 
-	client := &http.Client{
-		Timeout: oiTopConfig.Timeout,
-	}
+	// 使用带代理的HTTP客户端
+	client := createHTTPClient(coinPoolConfig.Timeout)
 
 	resp, err := client.Get(oiTopConfig.APIURL)
 	if err != nil {
@@ -642,4 +642,56 @@ func GetMergedCoinPool(ai500Limit int) (*MergedCoinPool, error) {
 		len(ai500TopSymbols), len(oiTopSymbols), len(allSymbols))
 
 	return merged, nil
+}
+
+
+// createHTTPClient 创建带超时和代理支持的HTTP客户端
+func createHTTPClient(timeout time.Duration) *http.Client {
+	// 获取全局代理URL（从环境变量或配置中）
+	proxyURL := getProxyURL()
+
+	client := &http.Client{
+		Timeout: timeout,
+	}
+
+	// 如果配置了代理URL，则设置代理
+	if proxyURL != "" {
+		proxyURLParsed, err := url.Parse(proxyURL)
+		if err == nil {
+			client.Transport = &http.Transport{
+				Proxy: http.ProxyURL(proxyURLParsed),
+				DialContext: (&net.Dialer{
+					Timeout:   30 * time.Second,
+					KeepAlive: 30 * time.Second,
+				}).DialContext,
+				MaxIdleConns:          100,
+				IdleConnTimeout:       90 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+			}
+		}
+	}
+
+	return client
+}
+
+// getProxyURL 获取代理URL
+func getProxyURL() string {
+	// 首先检查环境变量
+	if proxy := os.Getenv("HTTP_PROXY"); proxy != "" {
+		return proxy
+	}
+	if proxy := os.Getenv("http_proxy"); proxy != "" {
+		return proxy
+	}
+	if proxy := os.Getenv("HTTPS_PROXY"); proxy != "" {
+		return proxy
+	}
+	if proxy := os.Getenv("https_proxy"); proxy != "" {
+		return proxy
+	}
+
+	// 如果环境变量中没有，可以在这里添加从配置文件读取的逻辑
+	// 目前返回空字符串表示不使用代理
+	return ""
 }
